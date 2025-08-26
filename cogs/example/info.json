@@ -1,0 +1,10 @@
+{
+    "name": "ExampleCog",
+    "short": "Example cog for demonstrating Red-DiscordBot development",
+    "description": "A simple example cog with basic commands",
+    "tags": ["example", "development"],
+    "author": ["Developer"],
+    "requirements": [],
+    "min_bot_version": "3.5.0",
+    "end_user_data_statement": "This cog does not store any End User Data."
+}
