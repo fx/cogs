@@ -62,24 +62,24 @@ class Forwarder(commands.Cog):
     @commands.group(name="forward")
     @checks.admin()
     async def urlforward(self, ctx):
-        """Webhook forwarding configuration"""
+        """Message forwarding configuration"""
         pass
     
     @urlforward.command(name="url")
     @commands.guild_only()
     async def set_url(self, ctx, url: str):
-        """Set the url URL for message forwarding"""
+        """Set the URL for message forwarding"""
         try:
-            # Validate url URL format
+            # Validate URL format
             if not self._validate_url(url):
-                await ctx.send("Invalid url URL. Must be a valid Discord url URL.")
+                await ctx.send("Invalid URL. Must be a valid HTTP/HTTPS URL.")
                 return
             
             await self.config.guild(ctx.guild).forward_url.set(url)
-            await ctx.send("Webhook URL configured successfully.")
+            await ctx.send("Forward URL configured successfully.")
         except Exception as e:
-            log.error(f"Error setting url URL: {e}")
-            await ctx.send(f"Error setting url URL: {str(e)}")
+            log.error(f"Error setting URL: {e}")
+            await ctx.send(f"Error setting URL: {str(e)}")
     
     @urlforward.command(name="addregex")
     @commands.guild_only()
@@ -187,14 +187,14 @@ class Forwarder(commands.Cog):
     async def enable_forwarding(self, ctx):
         """Enable message forwarding"""
         await self.config.guild(ctx.guild).enabled.set(True)
-        await ctx.send("Webhook forwarding enabled.")
+        await ctx.send("Message forwarding enabled.")
     
     @urlforward.command(name="disable")
     @commands.guild_only()
     async def disable_forwarding(self, ctx):
         """Disable message forwarding"""
         await self.config.guild(ctx.guild).enabled.set(False)
-        await ctx.send("Webhook forwarding disabled.")
+        await ctx.send("Message forwarding disabled.")
     
     @urlforward.command(name="status")
     @commands.guild_only()
@@ -363,7 +363,7 @@ Forwarded messages tracked: {forwarded_count}"""
         return f"```json\n{json.dumps(basic_data, indent=2)}```"
     
     async def _forward_message(self, message: discord.Message, forward_url: str, is_reaction: bool = False):
-        """Forward message to url"""
+        """Forward message to URL"""
         try:
             # Prepare message data
             message_data = {
@@ -432,4 +432,4 @@ Forwarded messages tracked: {forwarded_count}"""
                     log.warning(f"Payload size: {len(str(url_payload))} chars, Attachments: {len(message_data['attachments'])}")
                     
         except Exception as e:
-            log.error(f"Error forwarding message to url: {e}")
+            log.error(f"Error forwarding message to URL: {e}")
