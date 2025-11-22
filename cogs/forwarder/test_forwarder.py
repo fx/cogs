@@ -4,7 +4,7 @@ import sys
 import types
 import pytest
 from hypothesis import given, strategies as st, settings, HealthCheck
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 
 # Create a real Cog base class for inheritance

@@ -1,6 +1,6 @@
 """Shared fixtures for Red-DiscordBot cog testing."""
 import pytest
-from unittest.mock import AsyncMock, MagicMock, PropertyMock
+from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.fixture

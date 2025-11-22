@@ -1,8 +1,7 @@
 import re
-import json
 import logging
 import aiohttp
-from typing import Optional
+from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
 
 import discord
@@ -43,8 +42,13 @@ class Forwarder(commands.Cog):
             await self.session.close()
     
     def _validate_url(self, url: str) -> bool:
-        """Validate URL format"""
-        return url.startswith(("http://", "https://")) and len(url) > 10
+        """Validate URL format using proper URL parsing."""
+        try:
+            parsed = urlparse(url)
+            # Must have http/https scheme and a valid netloc (domain)
+            return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+        except Exception:
+            return False
     
     def _get_compiled_pattern(self, pattern: str) -> re.Pattern:
         """Get or compile and cache a regex pattern"""
@@ -52,7 +56,10 @@ class Forwarder(commands.Cog):
             try:
                 self._compiled_patterns[pattern] = re.compile(pattern, re.IGNORECASE)
             except re.error:
-                # Return a pattern that never matches if compilation fails
+                # If the pattern is invalid, cache a regex that never matches.
+                # This ensures repeated checks for the same invalid pattern are
+                # efficient and safe, avoiding re-compilation attempts.
+                log.debug(f"Invalid regex pattern '{pattern}' - caching never-matching pattern")
                 self._compiled_patterns[pattern] = re.compile("(?!.*)")
         return self._compiled_patterns[pattern]
     
@@ -121,7 +128,11 @@ class Forwarder(commands.Cog):
                 return
             
             await self.config.guild(ctx.guild).forward_url.set(url)
-            await ctx.send("Forward URL configured successfully.")
+            await ctx.send(
+                "Forward URL configured successfully.\n"
+                "**Note:** Forwarded messages include author IDs, usernames, avatar URLs, "
+                "and message content. Ensure the target URL is trusted."
+            )
         except Exception as e:
             log.error(f"Error setting URL: {e}")
             await ctx.send(f"Error setting URL: {str(e)}")
@@ -352,16 +363,21 @@ Forwarded messages tracked: {forwarded_count}"""
             # Check if reaction emoji matches configured emoji
             if not config_data["enabled"] or not config_data["reaction_emoji"] or not config_data["forward_url"]:
                 return
-                
+
+            # Respect forward_bot_messages setting for reaction-triggered forwards
+            if reaction.message.author.bot and not config_data["forward_bot_messages"]:
+                log.debug(f"Skipping reaction forward for bot message {reaction.message.id}")
+                return
+
             # Support both unicode emoji and custom emoji
             emoji_str = str(reaction.emoji)
             if emoji_str != config_data["reaction_emoji"]:
                 return
-            
+
             # Check if this message was previously forwarded or should be forwarded now
             message_id = str(reaction.message.id)
             forwarded_messages = config_data["forwarded_messages"]
-            
+
             if message_id in forwarded_messages:
                 # Re-forward previously forwarded message
                 await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
@@ -447,8 +463,8 @@ Forwarded messages tracked: {forwarded_count}"""
                 response_text = await response.text()
                 
                 if response.status in [200, 204]:
-                    log.info(f"✅ Successfully forwarded message {message.id} - HTTP {response.status}")
-                    log.debug(f"Response body: {response_text[:200]}...")
+                    log.info(f"Successfully forwarded message {message.id} - HTTP {response.status}")
+                    log.debug(f"Response body: {response_text[:200]}{'...' if len(response_text) > 200 else ''}")
                 else:
                     log.warning(f"❌ Forward failed for message {message.id} - HTTP {response.status}")
                     log.warning(f"Response body: {response_text}")
