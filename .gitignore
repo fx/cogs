@@ -8,6 +8,7 @@ venv/
 
 # Red-DiscordBot data
 data/
+.data/
 logs/
 
 # Python
