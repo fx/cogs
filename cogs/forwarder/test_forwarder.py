@@ -164,6 +164,7 @@ class TestMessageMatching:
     @pytest.fixture
     def forwarder_with_session(self, forwarder):
         forwarder.session = MagicMock()
+        forwarder.session.closed = False  # Ensure session passes the validity check
         return forwarder
 
     @pytest.mark.asyncio
