@@ -90,7 +90,7 @@ mock_aiohttp.ClientSession = MagicMock
 sys.modules["aiohttp"] = mock_aiohttp
 
 # Now import the forwarder module
-from cogs.forwarder.forwarder import Forwarder
+from forwarder.forwarder import Forwarder
 
 
 @pytest.fixture

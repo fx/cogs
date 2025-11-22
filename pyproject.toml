@@ -1,11 +1,11 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["cogs"]
+testpaths = ["forwarder"]
 addopts = ["-v", "--tb=short", "-p", "no:red-discordbot"]
 
 [tool.coverage.run]
-source = ["cogs"]
+source = ["forwarder"]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
