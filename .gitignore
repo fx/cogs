@@ -8,10 +8,12 @@ venv/
 
 # Red-DiscordBot data
 data/
+.data/
 logs/
 
 # Python
 __pycache__/
+.hypothesis/
 *.py[cod]
 *$py.class
 *.so
