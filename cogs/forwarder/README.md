@@ -4,7 +4,7 @@ Forward Discord messages to any HTTP endpoint based on regex patterns or attachm
 
 I primarily use this to forward certain attachments to a n8n webhook trigger URL, trigger webhooks when a message includes keywords, or use a reaction emoji to manually trigger the forward.
 
-Currently this only supports one URL per channel, so you need something like a n8n workflow to fan out to other workflows based on the message received.
+Currently this only supports one URL per server (guild), so you need something like a n8n workflow to fan out to other workflows based on the message received.
 
 ## Installation
 
