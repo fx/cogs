@@ -2,32 +2,36 @@
 
 Personal red development environment and cogs.
 
-## Setup
+## Installation
 
-1. **Environment**: `python -m venv venv && source venv/bin/activate`
-2. **Install**: `pip install -r requirements.txt`
-3. **Setup**: `redbot-setup` (follow prompts - use "dev" as instance name)
-4. **Run**: `redbot dev --token YOUR_BOT_TOKEN`
-5. **Add cogs path** (in Discord): `[p]addpath /workspace/cogs`
+```
+[p]repo add fx-cogs https://github.com/fx/cogs
+[p]cog install fx-cogs <cog-name>
+[p]load <cog-name>
+```
 
-## Custom Cogs
+## Cogs
 
-| Cog                          | Description                                 |
-| ---------------------------- | ------------------------------------------- |
-| [forwarder](cogs/forwarder/) | Forward matching messages to HTTP endpoints |
+| Cog                      | Description                                 |
+| ------------------------ | ------------------------------------------- |
+| [forwarder](forwarder/)  | Forward matching messages to HTTP endpoints |
 
 ## Structure
 
 ```
 /workspace/
 ├── venv/              # Virtual environment
-├── cogs/              # Custom cogs directory
-│   └── forwarder/     # Message forwarding cog
+├── forwarder/         # Message forwarding cog
+├── example/           # Example cog for development
+├── info.json          # Repository metadata for Downloader
 └── requirements.txt   # Dependencies
 ```
 
-## Commands
+## Development
 
-- `redbot dev --token YOUR_TOKEN` - Start bot
-- `[p]load forwarder` - Load forwarder cog
-- `[p]forward status` - Check forwarder configuration
+1. **Environment**: `python -m venv venv && source venv/bin/activate`
+2. **Install**: `pip install -r requirements.txt`
+3. **Setup**: `redbot-setup` (follow prompts - use "dev" as instance name)
+4. **Run**: `redbot dev --token YOUR_BOT_TOKEN`
+5. **Add cogs path** (in Discord): `[p]addpath /path/to/repo`
+6. **Load cog**: `[p]load forwarder`
