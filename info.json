@@ -1,0 +1,6 @@
+{
+    "author": ["fx"],
+    "description": "A collection of custom Red-DiscordBot cogs for personal use.",
+    "install_msg": "Thanks for installing cogs from this repository! Use `[p]cog list` to see available cogs.",
+    "short": "Custom Red-DiscordBot cogs"
+}
