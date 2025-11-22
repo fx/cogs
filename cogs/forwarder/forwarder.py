@@ -1,5 +1,6 @@
 import re
 import logging
+import asyncio
 import aiohttp
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -31,6 +32,7 @@ class Forwarder(commands.Cog):
         self.config.register_guild(**default_guild)
         self.session = None
         self._compiled_patterns = {}  # Cache for compiled regex patterns
+        self._forwarding_locks = set()  # Prevent race conditions in reaction forwarding
     
     async def cog_load(self):
         """Initialize aiohttp session"""
@@ -335,8 +337,10 @@ Forwarded messages tracked: {forwarded_count}"""
                 await self._forward_message(message, config_data["forward_url"])
             else:
                 log.debug(f"Message {message.id} from #{message.channel.name} - no forward criteria met")
-                
-                # Store message ID for potential reaction forwarding
+
+                # When reaction_emoji is configured, store message metadata for messages that
+                # don't meet auto-forward criteria. This enables manual forwarding via reaction.
+                # Cleanup runs periodically to prevent unbounded growth.
                 if config_data["reaction_emoji"]:
                     # Periodically clean up old entries to prevent unbounded growth
                     await self._cleanup_old_forwarded_messages(message.guild)
@@ -376,23 +380,35 @@ Forwarded messages tracked: {forwarded_count}"""
 
             # Check if this message was previously forwarded or should be forwarded now
             message_id = str(reaction.message.id)
-            forwarded_messages = config_data["forwarded_messages"]
+            guild_id = str(reaction.message.guild.id)
+            lock_key = f"{guild_id}:{message_id}"
 
-            if message_id in forwarded_messages:
-                # Re-forward previously forwarded message
-                await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
-                log.info(f"Re-forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
-            else:
-                # Forward any message via reaction (allows manual forwarding of unmatched messages)
-                await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
+            # Prevent race condition: if this message is already being forwarded, skip
+            if lock_key in self._forwarding_locks:
+                log.debug(f"Message {message_id} already being forwarded, skipping duplicate")
+                return
 
-                # Store it for future reaction tracking
-                async with self.config.guild(reaction.message.guild).forwarded_messages() as forwarded:
-                    forwarded[message_id] = {
-                        "channel_id": str(reaction.message.channel.id),
-                        "forwarded_at": datetime.now(timezone.utc).isoformat()
-                    }
-                log.info(f"Forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
+            try:
+                self._forwarding_locks.add(lock_key)
+                forwarded_messages = config_data["forwarded_messages"]
+
+                if message_id in forwarded_messages:
+                    # Re-forward previously forwarded message
+                    await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
+                    log.info(f"Re-forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
+                else:
+                    # Forward any message via reaction (allows manual forwarding of unmatched messages)
+                    await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
+
+                    # Store it for future reaction tracking
+                    async with self.config.guild(reaction.message.guild).forwarded_messages() as forwarded:
+                        forwarded[message_id] = {
+                            "channel_id": str(reaction.message.channel.id),
+                            "forwarded_at": datetime.now(timezone.utc).isoformat()
+                        }
+                    log.info(f"Forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
+            finally:
+                self._forwarding_locks.discard(lock_key)
                 
         except Exception as e:
             log.error(f"Error processing reaction in guild {reaction.message.guild.id}: {e}")
