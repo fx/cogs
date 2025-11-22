@@ -3,7 +3,7 @@ import json
 import logging
 import aiohttp
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 import discord
 from redbot.core import commands, Config, checks
@@ -285,7 +285,7 @@ Forwarded messages tracked: {forwarded_count}"""
                     async with self.config.guild(message.guild).forwarded_messages() as forwarded:
                         forwarded[str(message.id)] = {
                             "channel_id": str(message.channel.id),
-                            "forwarded_at": datetime.utcnow().isoformat()
+                            "forwarded_at": datetime.now(timezone.utc).isoformat()
                         }
                 
         except Exception as e:
@@ -329,7 +329,7 @@ Forwarded messages tracked: {forwarded_count}"""
                     async with self.config.guild(reaction.message.guild).forwarded_messages() as forwarded:
                         forwarded[message_id] = {
                             "channel_id": str(reaction.message.channel.id),
-                            "forwarded_at": datetime.utcnow().isoformat()
+                            "forwarded_at": datetime.now(timezone.utc).isoformat()
                         }
                     log.info(f"Forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
                 
@@ -410,7 +410,7 @@ Forwarded messages tracked: {forwarded_count}"""
             
             # Create wrapper with forwarded_at timestamp
             url_payload = {
-                "forwarded_at": datetime.utcnow().isoformat(),
+                "forwarded_at": datetime.now(timezone.utc).isoformat(),
                 "is_reaction_forward": is_reaction,
                 "message": message_data
             }
