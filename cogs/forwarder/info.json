@@ -1,9 +1,9 @@
 {
     "name": "Forwarder",
     "short": "Forward messages to any URL based on regex and attachments",
-    "description": "Forwards Discord messages to any configured URL when they match regex patterns or contain attachments, with focus on audio files",
+    "description": "Forwards Discord messages to any configured URL when they match regex patterns or contain attachments.",
     "tags": ["forwarding", "audio", "attachments", "http"],
-    "author": ["Developer"],
+    "author": ["fx"],
     "requirements": ["aiohttp"],
     "min_bot_version": "3.5.0",
     "end_user_data_statement": "This cog stores URLs and regex patterns configured by administrators. Message content may be forwarded to external URLs."
