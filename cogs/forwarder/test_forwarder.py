@@ -116,8 +116,10 @@ class TestURLValidation:
     def test_invalid_url_no_protocol(self, forwarder):
         assert forwarder._validate_url("example.com/webhook") is False
 
-    def test_invalid_url_too_short(self, forwarder):
-        assert forwarder._validate_url("http://x") is False
+    def test_invalid_url_empty_netloc(self, forwarder):
+        """URLs with empty netloc should be invalid."""
+        assert forwarder._validate_url("http://") is False
+        assert forwarder._validate_url("https://") is False
 
     @given(st.text(max_size=100))
     @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -245,9 +247,11 @@ class TestCommands:
 
     @pytest.mark.asyncio
     async def test_set_valid_url(self, forwarder, mock_ctx):
-        """Setting a valid URL should succeed."""
+        """Setting a valid URL should succeed and show privacy notice."""
         await forwarder.set_url.callback(forwarder, mock_ctx, "https://example.com/webhook")
-        mock_ctx.send.assert_called_with("Forward URL configured successfully.")
+        call_args = mock_ctx.send.call_args[0][0]
+        assert "Forward URL configured successfully." in call_args
+        assert "Ensure the target URL is trusted" in call_args
 
     @pytest.mark.asyncio
     async def test_set_invalid_url(self, forwarder, mock_ctx):
