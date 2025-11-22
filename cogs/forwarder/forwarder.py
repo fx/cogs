@@ -2,8 +2,8 @@ import re
 import json
 import logging
 import aiohttp
-from typing import Dict, List, Optional
-from datetime import datetime, timezone
+from typing import Optional
+from datetime import datetime, timezone, timedelta
 
 import discord
 from redbot.core import commands, Config, checks
@@ -17,7 +17,8 @@ class Forwarder(commands.Cog):
     
     def __init__(self, bot: Red):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=1234567890)
+        # Unique identifier generated for the forwarder cog to avoid config conflicts
+        self.config = Config.get_conf(self, identifier=823456789012345678)
         default_guild = {
             "forward_url": None,
             "regex_patterns": [],
@@ -58,7 +59,51 @@ class Forwarder(commands.Cog):
     def _clear_pattern_cache(self):
         """Clear the compiled pattern cache"""
         self._compiled_patterns.clear()
-    
+
+    async def _cleanup_old_forwarded_messages(self, guild, max_age_hours: int = 24, max_entries: int = 1000):
+        """Remove old entries from forwarded_messages to prevent unbounded growth.
+
+        Args:
+            guild: The Discord guild to clean up
+            max_age_hours: Remove entries older than this many hours (default: 24)
+            max_entries: Maximum number of entries to keep (default: 1000)
+        """
+        async with self.config.guild(guild).forwarded_messages() as forwarded:
+            if not forwarded:
+                return
+
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+            # Remove old entries
+            expired_keys = []
+            for msg_id, data in forwarded.items():
+                try:
+                    forwarded_at = datetime.fromisoformat(data.get("forwarded_at", ""))
+                    if forwarded_at < cutoff_time:
+                        expired_keys.append(msg_id)
+                except (ValueError, TypeError):
+                    # Invalid timestamp, mark for removal
+                    expired_keys.append(msg_id)
+
+            for key in expired_keys:
+                del forwarded[key]
+
+            # If still over limit, remove oldest entries
+            if len(forwarded) > max_entries:
+                sorted_entries = sorted(
+                    forwarded.items(),
+                    key=lambda x: x[1].get("forwarded_at", ""),
+                    reverse=True
+                )
+                # Keep only the newest max_entries
+                keys_to_keep = {k for k, _ in sorted_entries[:max_entries]}
+                keys_to_remove = [k for k in forwarded if k not in keys_to_keep]
+                for key in keys_to_remove:
+                    del forwarded[key]
+
+            if expired_keys or len(forwarded) > max_entries:
+                log.debug(f"Cleaned up forwarded_messages: removed {len(expired_keys)} expired entries")
+
     @commands.group(name="forward")
     @checks.admin()
     async def urlforward(self, ctx):
@@ -268,7 +313,7 @@ Forwarded messages tracked: {forwarded_count}"""
                     should_forward = True
                     log.debug(f"Message {message.id} will forward - has attachments and no file extensions filter")
                 else:
-                    # Check if any attachment matches the audio extensions
+                    # Check if any attachment matches the configured file extensions
                     for attachment in message.attachments:
                         if any(attachment.filename.lower().endswith(ext.lower()) for ext in file_extensions):
                             should_forward = True
@@ -282,12 +327,15 @@ Forwarded messages tracked: {forwarded_count}"""
                 
                 # Store message ID for potential reaction forwarding
                 if config_data["reaction_emoji"]:
+                    # Periodically clean up old entries to prevent unbounded growth
+                    await self._cleanup_old_forwarded_messages(message.guild)
+
                     async with self.config.guild(message.guild).forwarded_messages() as forwarded:
                         forwarded[str(message.id)] = {
                             "channel_id": str(message.channel.id),
                             "forwarded_at": datetime.now(timezone.utc).isoformat()
                         }
-                
+
         except Exception as e:
             log.error(f"Error processing message in guild {message.guild.id}: {e}")
     
@@ -319,51 +367,27 @@ Forwarded messages tracked: {forwarded_count}"""
                 await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
                 log.info(f"Re-forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
             else:
-                # Check if message would normally be forwarded, if so forward it now
-                # For now, always allow reaction forwarding (can be made configurable later)
-                should_forward = True
-                if should_forward:
-                    await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
-                    
-                    # Store it for future reaction tracking
-                    async with self.config.guild(reaction.message.guild).forwarded_messages() as forwarded:
-                        forwarded[message_id] = {
-                            "channel_id": str(reaction.message.channel.id),
-                            "forwarded_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    log.info(f"Forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
+                # Forward any message via reaction (allows manual forwarding of unmatched messages)
+                await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
+
+                # Store it for future reaction tracking
+                async with self.config.guild(reaction.message.guild).forwarded_messages() as forwarded:
+                    forwarded[message_id] = {
+                        "channel_id": str(reaction.message.channel.id),
+                        "forwarded_at": datetime.now(timezone.utc).isoformat()
+                    }
+                log.info(f"Forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
                 
         except Exception as e:
             log.error(f"Error processing reaction in guild {reaction.message.guild.id}: {e}")
     
-    def _truncate_json_safely(self, data: dict, max_length: int) -> str:
-        """Safely truncate JSON data to fit within Discord limits"""
-        json_str = json.dumps(data, indent=2)
-        
-        if len(json_str) + 10 <= max_length:  # 10 chars for ```json\n```
-            return f"```json\n{json_str}```"
-        
-        # Try reducing content first
-        if "content" in data and len(data["content"]) > 100:
-            truncated_data = data.copy()
-            truncated_data["content"] = data["content"][:100] + "..."
-            json_str = json.dumps(truncated_data, indent=2)
-            if len(json_str) + 10 <= max_length:
-                return f"```json\n{json_str}```"
-        
-        # If still too long, show basic info only
-        basic_data = {
-            "message_id": data.get("message_id"),
-            "author": data.get("author", {}).get("display_name"),
-            "channel_name": data.get("channel_name"),
-            "content": (data.get("content", "")[:200] + "...") if len(data.get("content", "")) > 200 else data.get("content", ""),
-            "attachment_count": len(data.get("attachments", [])),
-            "jump_url": data.get("jump_url")
-        }
-        return f"```json\n{json.dumps(basic_data, indent=2)}```"
-    
     async def _forward_message(self, message: discord.Message, forward_url: str, is_reaction: bool = False):
         """Forward message to URL"""
+        # Check if session is initialized and not closed
+        if not self.session or self.session.closed:
+            log.error("Cannot forward message: aiohttp session not initialized or closed")
+            return
+
         try:
             # Prepare message data
             message_data = {
@@ -414,8 +438,7 @@ Forwarded messages tracked: {forwarded_count}"""
                 "is_reaction_forward": is_reaction,
                 "message": message_data
             }
-            
-            
+
             # Log forward attempt
             forward_type = "reaction-triggered" if is_reaction else "automatic"
             log.info(f"Attempting to forward message {message.id} ({forward_type}) from #{message.channel.name} to {forward_url}")
