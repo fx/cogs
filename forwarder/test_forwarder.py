@@ -101,6 +101,9 @@ def forwarder(mock_bot, mock_config):
     cog.config = mock_config
     cog.session = None
     cog._compiled_patterns = {}
+    cog._forwarding_locks = set()
+    cog._confirmation_emojis = ["▶️", "⏩", "⏭️"]
+    cog._warning_emoji = "⚠️"
     return cog
 
 
@@ -300,3 +303,205 @@ class TestHypothesisProperties:
         compiled = forwarder._get_compiled_pattern(pattern)
         result = compiled.search(content)
         assert result is None or isinstance(result, re.Match)
+
+
+class TestConfirmationEmoji:
+    """Test confirmation emoji functionality."""
+
+    def test_emoji_sequence_defined(self, forwarder):
+        """Confirmation emoji sequence should be defined."""
+        assert hasattr(forwarder, '_confirmation_emojis')
+        assert len(forwarder._confirmation_emojis) == 3
+        assert forwarder._confirmation_emojis == ["▶️", "⏩", "⏭️"]
+
+    def test_first_forward_emoji(self, forwarder):
+        """First forward should use first emoji (index 0)."""
+        forward_count = 1
+        emoji_index = min(forward_count - 1, len(forwarder._confirmation_emojis) - 1)
+        assert forwarder._confirmation_emojis[emoji_index] == "▶️"
+
+    def test_second_forward_emoji(self, forwarder):
+        """Second forward should use second emoji (index 1)."""
+        forward_count = 2
+        emoji_index = min(forward_count - 1, len(forwarder._confirmation_emojis) - 1)
+        assert forwarder._confirmation_emojis[emoji_index] == "⏩"
+
+    def test_third_forward_emoji(self, forwarder):
+        """Third forward should use third emoji (index 2)."""
+        forward_count = 3
+        emoji_index = min(forward_count - 1, len(forwarder._confirmation_emojis) - 1)
+        assert forwarder._confirmation_emojis[emoji_index] == "⏭️"
+
+    def test_fourth_forward_clamps_to_third(self, forwarder):
+        """Fourth+ forward should clamp to third emoji."""
+        forward_count = 4
+        emoji_index = min(forward_count - 1, len(forwarder._confirmation_emojis) - 1)
+        assert forwarder._confirmation_emojis[emoji_index] == "⏭️"
+
+    def test_large_forward_count_clamps(self, forwarder):
+        """Large forward counts should clamp to last emoji."""
+        forward_count = 100
+        emoji_index = min(forward_count - 1, len(forwarder._confirmation_emojis) - 1)
+        assert forwarder._confirmation_emojis[emoji_index] == "⏭️"
+
+    @pytest.mark.asyncio
+    async def test_add_confirmation_emoji_first_forward(self, forwarder, mock_message):
+        """Test adding confirmation emoji on first forward."""
+        mock_message.add_reaction = AsyncMock()
+        mock_message.remove_reaction = AsyncMock()
+
+        await forwarder._add_confirmation_emoji(mock_message, 1)
+
+        mock_message.add_reaction.assert_called_once_with("▶️")
+        # Should try to remove warning emoji (in case of retry after failure)
+        mock_message.remove_reaction.assert_called_once_with("⚠️", forwarder.bot.user)
+
+    @pytest.mark.asyncio
+    async def test_add_confirmation_emoji_second_forward(self, forwarder, mock_message):
+        """Test adding confirmation emoji on second forward removes first."""
+        mock_message.add_reaction = AsyncMock()
+        mock_message.remove_reaction = AsyncMock()
+
+        await forwarder._add_confirmation_emoji(mock_message, 2)
+
+        # Should remove warning emoji and previous confirmation emoji
+        assert mock_message.remove_reaction.call_count == 2
+        mock_message.remove_reaction.assert_any_call("⚠️", forwarder.bot.user)
+        mock_message.remove_reaction.assert_any_call("▶️", forwarder.bot.user)
+        mock_message.add_reaction.assert_called_once_with("⏩")
+
+    @pytest.mark.asyncio
+    async def test_add_confirmation_emoji_third_forward(self, forwarder, mock_message):
+        """Test adding confirmation emoji on third forward removes second."""
+        mock_message.add_reaction = AsyncMock()
+        mock_message.remove_reaction = AsyncMock()
+
+        await forwarder._add_confirmation_emoji(mock_message, 3)
+
+        # Should remove warning emoji and previous confirmation emoji
+        assert mock_message.remove_reaction.call_count == 2
+        mock_message.remove_reaction.assert_any_call("⚠️", forwarder.bot.user)
+        mock_message.remove_reaction.assert_any_call("⏩", forwarder.bot.user)
+        mock_message.add_reaction.assert_called_once_with("⏭️")
+
+
+class TestForwardMessageReturnValue:
+    """Test _forward_message return values."""
+
+    @pytest.fixture
+    def forwarder_with_session(self, forwarder):
+        forwarder.session = MagicMock()
+        forwarder.session.closed = False
+        return forwarder
+
+    @pytest.mark.asyncio
+    async def test_returns_false_without_session(self, forwarder, mock_message):
+        """Should return False when session is None."""
+        forwarder.session = None
+        result = await forwarder._forward_message(mock_message, "https://example.com")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_with_closed_session(self, forwarder_with_session, mock_message):
+        """Should return False when session is closed."""
+        forwarder_with_session.session.closed = True
+        result = await forwarder_with_session._forward_message(mock_message, "https://example.com")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_true_on_200_response(self, forwarder_with_session, mock_message):
+        """Should return True on HTTP 200 response."""
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.text = AsyncMock(return_value="OK")
+
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        forwarder_with_session.session.post.return_value = mock_cm
+
+        result = await forwarder_with_session._forward_message(mock_message, "https://example.com")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_true_on_204_response(self, forwarder_with_session, mock_message):
+        """Should return True on HTTP 204 response."""
+        mock_response = MagicMock()
+        mock_response.status = 204
+        mock_response.text = AsyncMock(return_value="")
+
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        forwarder_with_session.session.post.return_value = mock_cm
+
+        result = await forwarder_with_session._forward_message(mock_message, "https://example.com")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_400_response(self, forwarder_with_session, mock_message):
+        """Should return False on HTTP 400 response."""
+        mock_response = MagicMock()
+        mock_response.status = 400
+        mock_response.text = AsyncMock(return_value="Bad Request")
+
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        forwarder_with_session.session.post.return_value = mock_cm
+
+        result = await forwarder_with_session._forward_message(mock_message, "https://example.com")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_500_response(self, forwarder_with_session, mock_message):
+        """Should return False on HTTP 500 response."""
+        mock_response = MagicMock()
+        mock_response.status = 500
+        mock_response.text = AsyncMock(return_value="Internal Server Error")
+
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        forwarder_with_session.session.post.return_value = mock_cm
+
+        result = await forwarder_with_session._forward_message(mock_message, "https://example.com")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_on_exception(self, forwarder_with_session, mock_message):
+        """Should return False when an exception occurs."""
+        forwarder_with_session.session.post.side_effect = Exception("Connection error")
+
+        result = await forwarder_with_session._forward_message(mock_message, "https://example.com")
+        assert result is False
+
+
+class TestWarningEmoji:
+    """Test warning emoji functionality."""
+
+    def test_warning_emoji_defined(self, forwarder):
+        """Warning emoji should be defined."""
+        assert hasattr(forwarder, '_warning_emoji')
+        assert forwarder._warning_emoji == "⚠️"
+
+    @pytest.mark.asyncio
+    async def test_add_warning_emoji(self, forwarder, mock_message):
+        """Test adding warning emoji on forward failure."""
+        mock_message.add_reaction = AsyncMock()
+
+        await forwarder._add_warning_emoji(mock_message)
+
+        mock_message.add_reaction.assert_called_once_with("⚠️")
+
+    @pytest.mark.asyncio
+    async def test_warning_emoji_removed_on_success(self, forwarder, mock_message):
+        """Test that warning emoji is removed when forward succeeds."""
+        mock_message.add_reaction = AsyncMock()
+        mock_message.remove_reaction = AsyncMock()
+
+        # First forward should try to remove warning emoji
+        await forwarder._add_confirmation_emoji(mock_message, 1)
+
+        # Verify warning emoji removal was attempted
+        mock_message.remove_reaction.assert_called_with("⚠️", forwarder.bot.user)

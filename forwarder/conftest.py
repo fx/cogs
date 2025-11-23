@@ -1,4 +1,8 @@
-"""Shared fixtures for Red-DiscordBot cog testing."""
+"""Shared fixtures for Red-DiscordBot cog testing.
+
+Note: The actual mock setup for redbot, discord, and aiohttp is in the root
+conftest.py to ensure proper module mocking before package imports.
+"""
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -85,7 +89,7 @@ def mock_config():
         "forward_attachments": True,
         "file_extensions": [],
         "enabled": False,
-        "reaction_emoji": None,
+        "reaction_emoji": "🔁",
         "forwarded_messages": {},
         "forward_bot_messages": False
     }

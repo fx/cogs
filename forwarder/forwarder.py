@@ -25,7 +25,7 @@ class Forwarder(commands.Cog):
             "forward_attachments": True,
             "file_extensions": [],
             "enabled": False,
-            "reaction_emoji": None,
+            "reaction_emoji": "🔁",
             "forwarded_messages": {},
             "forward_bot_messages": False
         }
@@ -33,6 +33,8 @@ class Forwarder(commands.Cog):
         self.session = None
         self._compiled_patterns = {}  # Cache for compiled regex patterns
         self._forwarding_locks = set()  # Prevent race conditions in reaction forwarding
+        self._confirmation_emojis = ["▶️", "⏩", "⏭️"]  # Cycling emojis for forward confirmation
+        self._warning_emoji = "⚠️"  # Emoji to indicate forward failure
     
     async def cog_load(self):
         """Initialize aiohttp session"""
@@ -334,53 +336,67 @@ Forwarded messages tracked: {forwarded_count}"""
                             break
             
             if should_forward:
-                await self._forward_message(message, config_data["forward_url"])
-            else:
-                log.debug(f"Message {message.id} from #{message.channel.name} - no forward criteria met")
-
-                # When reaction_emoji is configured, store message metadata for messages that
-                # don't meet auto-forward criteria. This enables manual forwarding via reaction.
-                # Cleanup runs periodically to prevent unbounded growth.
-                if config_data["reaction_emoji"]:
-                    # Periodically clean up old entries to prevent unbounded growth
-                    await self._cleanup_old_forwarded_messages(message.guild)
-
+                success = await self._forward_message(message, config_data["forward_url"])
+                if success:
+                    # Track forwarded message and add confirmation emoji
                     async with self.config.guild(message.guild).forwarded_messages() as forwarded:
                         forwarded[str(message.id)] = {
                             "channel_id": str(message.channel.id),
-                            "forwarded_at": datetime.now(timezone.utc).isoformat()
+                            "forwarded_at": datetime.now(timezone.utc).isoformat(),
+                            "forward_count": 1
+                        }
+                    await self._add_confirmation_emoji(message, 1)
+                else:
+                    # Add warning emoji on failure
+                    await self._add_warning_emoji(message)
+            else:
+                log.debug(f"Message {message.id} from #{message.channel.name} - no forward criteria met")
+                # Only track message for potential reaction-based forwarding if reaction_emoji is configured
+                if config_data.get("reaction_emoji"):
+                    # Periodically clean up old entries to prevent unbounded growth
+                    await self._cleanup_old_forwarded_messages(message.guild)
+                    async with self.config.guild(message.guild).forwarded_messages() as forwarded:
+                        forwarded[str(message.id)] = {
+                            "channel_id": str(message.channel.id),
+                            "forwarded_at": datetime.now(timezone.utc).isoformat(),
+                            "forward_count": 0  # Not yet forwarded
                         }
 
         except Exception as e:
             log.error(f"Error processing message in guild {message.guild.id}: {e}")
     
     @commands.Cog.listener()
-    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
-        """Listen for reactions to re-forward messages"""
-        # Skip bot reactions and DMs
-        if user.bot or not reaction.message.guild:
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        """Listen for reactions to forward messages.
+
+        Uses raw reaction event to handle reactions on uncached/older messages.
+        """
+        # Skip DMs (no guild_id) and bot reactions
+        if not payload.guild_id:
             return
-        
+
+        # Check if this is a bot reaction
+        if payload.member and payload.member.bot:
+            return
+
         try:
-            config_data = await self.config.guild(reaction.message.guild).all()
-            
+            guild = self.bot.get_guild(payload.guild_id)
+            if not guild:
+                return
+
+            config_data = await self.config.guild(guild).all()
+
             # Check if reaction emoji matches configured emoji
             if not config_data["enabled"] or not config_data["reaction_emoji"] or not config_data["forward_url"]:
                 return
 
-            # Respect forward_bot_messages setting for reaction-triggered forwards
-            if reaction.message.author.bot and not config_data["forward_bot_messages"]:
-                log.debug(f"Skipping reaction forward for bot message {reaction.message.id}")
-                return
-
             # Support both unicode emoji and custom emoji
-            emoji_str = str(reaction.emoji)
+            emoji_str = str(payload.emoji)
             if emoji_str != config_data["reaction_emoji"]:
                 return
 
-            # Check if this message was previously forwarded or should be forwarded now
-            message_id = str(reaction.message.id)
-            guild_id = str(reaction.message.guild.id)
+            message_id = str(payload.message_id)
+            guild_id = str(payload.guild_id)
             lock_key = f"{guild_id}:{message_id}"
 
             # Prevent race condition: if this message is already being forwarded, skip
@@ -390,35 +406,60 @@ Forwarded messages tracked: {forwarded_count}"""
 
             try:
                 self._forwarding_locks.add(lock_key)
-                forwarded_messages = config_data["forwarded_messages"]
 
-                if message_id in forwarded_messages:
-                    # Re-forward previously forwarded message
-                    await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
-                    log.info(f"Re-forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
+                # Fetch the channel and message (needed for uncached messages)
+                channel = guild.get_channel(payload.channel_id)
+                if not channel:
+                    channel = await self.bot.fetch_channel(payload.channel_id)
+
+                message = await channel.fetch_message(payload.message_id)
+
+                # Respect forward_bot_messages setting for reaction-triggered forwards
+                if message.author.bot and not config_data["forward_bot_messages"]:
+                    log.debug(f"Skipping reaction forward for bot message {message_id}")
+                    return
+
+                # Forward the message
+                success = await self._forward_message(message, config_data["forward_url"], is_reaction=True)
+
+                if success:
+                    # Update forward count and add confirmation emoji
+                    async with self.config.guild(guild).forwarded_messages() as forwarded:
+                        if message_id in forwarded:
+                            forwarded[message_id]["forward_count"] = forwarded[message_id].get("forward_count", 0) + 1
+                            forwarded[message_id]["forwarded_at"] = datetime.now(timezone.utc).isoformat()
+                        else:
+                            forwarded[message_id] = {
+                                "channel_id": str(payload.channel_id),
+                                "forwarded_at": datetime.now(timezone.utc).isoformat(),
+                                "forward_count": 1
+                            }
+                        forward_count = forwarded[message_id]["forward_count"]
+
+                    await self._add_confirmation_emoji(message, forward_count)
+                    user_name = payload.member.name if payload.member else "unknown"
+                    log.info(f"Forwarded message {message_id} (count: {forward_count}) due to {emoji_str} reaction by {user_name}")
                 else:
-                    # Forward any message via reaction (allows manual forwarding of unmatched messages)
-                    await self._forward_message(reaction.message, config_data["forward_url"], is_reaction=True)
-
-                    # Store it for future reaction tracking
-                    async with self.config.guild(reaction.message.guild).forwarded_messages() as forwarded:
-                        forwarded[message_id] = {
-                            "channel_id": str(reaction.message.channel.id),
-                            "forwarded_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    log.info(f"Forwarded message {message_id} due to {emoji_str} reaction by {user.name}")
+                    # Add warning emoji on failure
+                    await self._add_warning_emoji(message)
             finally:
                 self._forwarding_locks.discard(lock_key)
-                
+
+        except discord.NotFound:
+            log.warning(f"Message {payload.message_id} not found for reaction forward")
         except Exception as e:
-            log.error(f"Error processing reaction in guild {reaction.message.guild.id}: {e}")
+            log.error(f"Error processing reaction in guild {payload.guild_id}: {e}")
     
-    async def _forward_message(self, message: discord.Message, forward_url: str, is_reaction: bool = False):
-        """Forward message to URL"""
+    async def _forward_message(self, message: discord.Message, forward_url: str, is_reaction: bool = False) -> bool:
+        """Forward message to URL.
+
+        Returns:
+            True if the message was successfully forwarded (HTTP 200/204), False otherwise.
+        """
         # Check if session is initialized and not closed
         if not self.session or self.session.closed:
             log.error("Cannot forward message: aiohttp session not initialized or closed")
-            return
+            return False
 
         try:
             # Prepare message data
@@ -477,14 +518,65 @@ Forwarded messages tracked: {forwarded_count}"""
             
             async with self.session.post(forward_url, json=url_payload) as response:
                 response_text = await response.text()
-                
+
                 if response.status in [200, 204]:
                     log.info(f"Successfully forwarded message {message.id} - HTTP {response.status}")
                     log.debug(f"Response body: {response_text[:200]}{'...' if len(response_text) > 200 else ''}")
+                    return True
                 else:
-                    log.warning(f"❌ Forward failed for message {message.id} - HTTP {response.status}")
+                    log.warning(f"Forward failed for message {message.id} - HTTP {response.status}")
                     log.warning(f"Response body: {response_text}")
                     log.warning(f"Payload size: {len(str(url_payload))} chars, Attachments: {len(message_data['attachments'])}")
-                    
+                    return False
+
         except Exception as e:
             log.error(f"Error forwarding message to URL: {e}")
+            return False
+
+    async def _add_confirmation_emoji(self, message: discord.Message, forward_count: int):
+        """Add a confirmation emoji to indicate successful forward.
+
+        Cycles through emojis based on forward count:
+        - 1st forward: ▶️
+        - 2nd forward: ⏩
+        - 3rd+ forward: ⏭️
+
+        Removes previous confirmation emoji and warning emoji before adding new one.
+        """
+        try:
+            # Determine which emoji to use (0-indexed, clamp to last emoji for 3+)
+            emoji_index = min(forward_count - 1, len(self._confirmation_emojis) - 1)
+            new_emoji = self._confirmation_emojis[emoji_index]
+
+            # Remove warning emoji if present (forward succeeded after previous failure)
+            try:
+                await message.remove_reaction(self._warning_emoji, self.bot.user)
+            except discord.HTTPException:
+                pass  # Warning emoji not present or can't be removed
+
+            # Remove previous confirmation emoji if present (for re-forwards)
+            if forward_count > 1:
+                prev_emoji_index = min(forward_count - 2, len(self._confirmation_emojis) - 1)
+                prev_emoji = self._confirmation_emojis[prev_emoji_index]
+                try:
+                    await message.remove_reaction(prev_emoji, self.bot.user)
+                except discord.HTTPException:
+                    pass  # Emoji not present or can't be removed
+
+            # Add new confirmation emoji
+            await message.add_reaction(new_emoji)
+            log.debug(f"Added confirmation emoji {new_emoji} to message {message.id}")
+        except discord.Forbidden:
+            log.warning(f"Missing permissions to add reaction to message {message.id}")
+        except discord.HTTPException as e:
+            log.warning(f"Failed to add confirmation emoji to message {message.id}: {e}")
+
+    async def _add_warning_emoji(self, message: discord.Message):
+        """Add a warning emoji to indicate forward failure."""
+        try:
+            await message.add_reaction(self._warning_emoji)
+            log.debug(f"Added warning emoji {self._warning_emoji} to message {message.id}")
+        except discord.Forbidden:
+            log.warning(f"Missing permissions to add warning reaction to message {message.id}")
+        except discord.HTTPException as e:
+            log.warning(f"Failed to add warning emoji to message {message.id}: {e}")
