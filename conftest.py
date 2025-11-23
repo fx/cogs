@@ -83,8 +83,10 @@ mock_discord = types.ModuleType("discord")
 mock_discord.Message = MagicMock
 mock_discord.Reaction = MagicMock
 mock_discord.User = MagicMock
+mock_discord.RawReactionActionEvent = MagicMock
 mock_discord.Forbidden = Exception
 mock_discord.HTTPException = Exception
+mock_discord.NotFound = Exception
 sys.modules["discord"] = mock_discord
 
 # Mock aiohttp
