@@ -20,7 +20,8 @@ Personal red development environment and cogs.
 
 ```
 /workspace/
-├── venv/              # Virtual environment
+├── .data/             # Red instance data (gitignored)
+├── venv/              # Virtual environment (gitignored)
 ├── forwarder/         # Message forwarding cog
 ├── example/           # Example cog for development
 ├── info.json          # Repository metadata for Downloader
@@ -31,7 +32,7 @@ Personal red development environment and cogs.
 
 1. **Environment**: `python -m venv venv && source venv/bin/activate`
 2. **Install**: `pip install -r requirements.txt`
-3. **Setup**: `redbot-setup` (follow prompts - use "dev" as instance name)
+3. **Setup**: `redbot-setup --no-prompt --instance-name dev --data-path ./.data --backend json`
 4. **Run**: `redbot dev --token YOUR_BOT_TOKEN`
 5. **Add cogs path** (in Discord): `[p]addpath /path/to/repo`
 6. **Load cog**: `[p]load forwarder`

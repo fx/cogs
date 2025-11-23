@@ -1,1 +1,1 @@
-Red-DiscordBot==3.5.20
+Red-DiscordBot==3.5.22
