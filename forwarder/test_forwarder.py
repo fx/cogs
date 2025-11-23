@@ -103,6 +103,7 @@ def forwarder(mock_bot, mock_config):
     cog._compiled_patterns = {}
     cog._forwarding_locks = set()
     cog._confirmation_emojis = ["▶️", "⏩", "⏭️"]
+    cog._warning_emoji = "⚠️"
     return cog
 
 
@@ -352,7 +353,8 @@ class TestConfirmationEmoji:
         await forwarder._add_confirmation_emoji(mock_message, 1)
 
         mock_message.add_reaction.assert_called_once_with("▶️")
-        mock_message.remove_reaction.assert_not_called()
+        # Should try to remove warning emoji (in case of retry after failure)
+        mock_message.remove_reaction.assert_called_once_with("⚠️", forwarder.bot.user)
 
     @pytest.mark.asyncio
     async def test_add_confirmation_emoji_second_forward(self, forwarder, mock_message):
@@ -362,7 +364,10 @@ class TestConfirmationEmoji:
 
         await forwarder._add_confirmation_emoji(mock_message, 2)
 
-        mock_message.remove_reaction.assert_called_once_with("▶️", forwarder.bot.user)
+        # Should remove warning emoji and previous confirmation emoji
+        assert mock_message.remove_reaction.call_count == 2
+        mock_message.remove_reaction.assert_any_call("⚠️", forwarder.bot.user)
+        mock_message.remove_reaction.assert_any_call("▶️", forwarder.bot.user)
         mock_message.add_reaction.assert_called_once_with("⏩")
 
     @pytest.mark.asyncio
@@ -373,7 +378,10 @@ class TestConfirmationEmoji:
 
         await forwarder._add_confirmation_emoji(mock_message, 3)
 
-        mock_message.remove_reaction.assert_called_once_with("⏩", forwarder.bot.user)
+        # Should remove warning emoji and previous confirmation emoji
+        assert mock_message.remove_reaction.call_count == 2
+        mock_message.remove_reaction.assert_any_call("⚠️", forwarder.bot.user)
+        mock_message.remove_reaction.assert_any_call("⏩", forwarder.bot.user)
         mock_message.add_reaction.assert_called_once_with("⏭️")
 
 
@@ -467,3 +475,33 @@ class TestForwardMessageReturnValue:
 
         result = await forwarder_with_session._forward_message(mock_message, "https://example.com")
         assert result is False
+
+
+class TestWarningEmoji:
+    """Test warning emoji functionality."""
+
+    def test_warning_emoji_defined(self, forwarder):
+        """Warning emoji should be defined."""
+        assert hasattr(forwarder, '_warning_emoji')
+        assert forwarder._warning_emoji == "⚠️"
+
+    @pytest.mark.asyncio
+    async def test_add_warning_emoji(self, forwarder, mock_message):
+        """Test adding warning emoji on forward failure."""
+        mock_message.add_reaction = AsyncMock()
+
+        await forwarder._add_warning_emoji(mock_message)
+
+        mock_message.add_reaction.assert_called_once_with("⚠️")
+
+    @pytest.mark.asyncio
+    async def test_warning_emoji_removed_on_success(self, forwarder, mock_message):
+        """Test that warning emoji is removed when forward succeeds."""
+        mock_message.add_reaction = AsyncMock()
+        mock_message.remove_reaction = AsyncMock()
+
+        # First forward should try to remove warning emoji
+        await forwarder._add_confirmation_emoji(mock_message, 1)
+
+        # Verify warning emoji removal was attempted
+        mock_message.remove_reaction.assert_called_with("⚠️", forwarder.bot.user)

@@ -34,6 +34,7 @@ class Forwarder(commands.Cog):
         self._compiled_patterns = {}  # Cache for compiled regex patterns
         self._forwarding_locks = set()  # Prevent race conditions in reaction forwarding
         self._confirmation_emojis = ["▶️", "⏩", "⏭️"]  # Cycling emojis for forward confirmation
+        self._warning_emoji = "⚠️"  # Emoji to indicate forward failure
     
     async def cog_load(self):
         """Initialize aiohttp session"""
@@ -345,6 +346,9 @@ Forwarded messages tracked: {forwarded_count}"""
                             "forward_count": 1
                         }
                     await self._add_confirmation_emoji(message, 1)
+                else:
+                    # Add warning emoji on failure
+                    await self._add_warning_emoji(message)
             else:
                 log.debug(f"Message {message.id} from #{message.channel.name} - no forward criteria met")
                 # Track message for potential reaction-based forwarding
@@ -416,6 +420,9 @@ Forwarded messages tracked: {forwarded_count}"""
 
                     await self._add_confirmation_emoji(reaction.message, forward_count)
                     log.info(f"Forwarded message {message_id} (count: {forward_count}) due to {emoji_str} reaction by {user.name}")
+                else:
+                    # Add warning emoji on failure
+                    await self._add_warning_emoji(reaction.message)
             finally:
                 self._forwarding_locks.discard(lock_key)
                 
@@ -513,12 +520,18 @@ Forwarded messages tracked: {forwarded_count}"""
         - 2nd forward: ⏩
         - 3rd+ forward: ⏭️
 
-        Removes previous confirmation emoji before adding new one.
+        Removes previous confirmation emoji and warning emoji before adding new one.
         """
         try:
             # Determine which emoji to use (0-indexed, clamp to last emoji for 3+)
             emoji_index = min(forward_count - 1, len(self._confirmation_emojis) - 1)
             new_emoji = self._confirmation_emojis[emoji_index]
+
+            # Remove warning emoji if present (forward succeeded after previous failure)
+            try:
+                await message.remove_reaction(self._warning_emoji, self.bot.user)
+            except discord.HTTPException:
+                pass  # Warning emoji not present or can't be removed
 
             # Remove previous confirmation emoji if present (for re-forwards)
             if forward_count > 1:
@@ -536,3 +549,13 @@ Forwarded messages tracked: {forwarded_count}"""
             log.warning(f"Missing permissions to add reaction to message {message.id}")
         except discord.HTTPException as e:
             log.warning(f"Failed to add confirmation emoji to message {message.id}: {e}")
+
+    async def _add_warning_emoji(self, message: discord.Message):
+        """Add a warning emoji to indicate forward failure."""
+        try:
+            await message.add_reaction(self._warning_emoji)
+            log.debug(f"Added warning emoji {self._warning_emoji} to message {message.id}")
+        except discord.Forbidden:
+            log.warning(f"Missing permissions to add warning reaction to message {message.id}")
+        except discord.HTTPException as e:
+            log.warning(f"Failed to add warning emoji to message {message.id}: {e}")
