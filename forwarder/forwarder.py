@@ -27,7 +27,8 @@ class Forwarder(commands.Cog):
             "enabled": False,
             "reaction_emoji": "🔁",
             "forwarded_messages": {},
-            "forward_bot_messages": False
+            "forward_bot_messages": False,
+            "skip_own_commands": True
         }
         self.config.register_guild(**default_guild)
         self.session = None
@@ -70,6 +71,21 @@ class Forwarder(commands.Cog):
     def _clear_pattern_cache(self):
         """Clear the compiled pattern cache"""
         self._compiled_patterns.clear()
+
+    async def _is_own_command(self, message: discord.Message) -> bool:
+        """Check if a message is a command directed at this bot.
+
+        Returns True if the message starts with one of the bot's configured prefixes.
+        """
+        if not message.content:
+            return False
+
+        try:
+            prefixes = await self.bot._prefix_cache.get_prefixes(message.guild)
+            return any(message.content.startswith(prefix) for prefix in prefixes)
+        except Exception as e:
+            log.warning(f"Error checking command prefixes: {e}")
+            return False
 
     async def _cleanup_old_forwarded_messages(self, guild, max_age_hours: int = 24, max_entries: int = 1000):
         """Remove old entries from forwarded_messages to prevent unbounded growth.
@@ -241,7 +257,23 @@ class Forwarder(commands.Cog):
             await self.config.guild(ctx.guild).forward_bot_messages.set(enabled)
             status = "enabled" if enabled else "disabled"
             await ctx.send(f"Bot message forwarding {status}.")
-    
+
+    @urlforward.command(name="skipcommands")
+    @commands.guild_only()
+    async def toggle_skip_commands(self, ctx, enabled: bool = None):
+        """Enable/disable skipping bot commands from forwarding.
+
+        When enabled (default), messages that start with the bot's command
+        prefix (e.g., !forward, !help) will not be forwarded.
+        """
+        if enabled is None:
+            current = await self.config.guild(ctx.guild).skip_own_commands()
+            await ctx.send(f"Skip bot commands is currently {'enabled' if current else 'disabled'}.")
+        else:
+            await self.config.guild(ctx.guild).skip_own_commands.set(enabled)
+            status = "enabled" if enabled else "disabled"
+            await ctx.send(f"Skip bot commands {status}.")
+
     @urlforward.command(name="enable")
     @commands.guild_only()
     async def enable_forwarding(self, ctx):
@@ -270,7 +302,8 @@ class Forwarder(commands.Cog):
         reaction_emoji = config_data["reaction_emoji"] if config_data["reaction_emoji"] else "None"
         forwarded_count = len(config_data["forwarded_messages"])
         bot_messages = "Yes" if config_data["forward_bot_messages"] else "No"
-        
+        skip_commands = "Yes" if config_data["skip_own_commands"] else "No"
+
         status_msg = f"""**Forwarder Status:**
 Status: {status}
 URL configured: {url_set}
@@ -278,6 +311,7 @@ Regex patterns: {pattern_count}
 Forward attachments: {attachments}
 File extensions: {file_exts}
 Forward bot messages: {bot_messages}
+Skip bot commands: {skip_commands}
 Reaction emoji: {reaction_emoji}
 Forwarded messages tracked: {forwarded_count}"""
         
@@ -300,7 +334,12 @@ Forwarded messages tracked: {forwarded_count}"""
             # Skip bot messages unless configured to forward them
             if message.author.bot and not config_data["forward_bot_messages"]:
                 return
-            
+
+            # Skip commands directed at this bot unless configured otherwise
+            if config_data["skip_own_commands"] and await self._is_own_command(message):
+                log.debug(f"Message {message.id} skipped - is a bot command")
+                return
+
             should_forward = False
             
             # If no regex patterns are configured, forward all messages
@@ -417,6 +456,11 @@ Forwarded messages tracked: {forwarded_count}"""
                 # Respect forward_bot_messages setting for reaction-triggered forwards
                 if message.author.bot and not config_data["forward_bot_messages"]:
                     log.debug(f"Skipping reaction forward for bot message {message_id}")
+                    return
+
+                # Skip commands directed at this bot unless configured otherwise
+                if config_data["skip_own_commands"] and await self._is_own_command(message):
+                    log.debug(f"Skipping reaction forward for bot command {message_id}")
                     return
 
                 # Forward the message

@@ -170,6 +170,9 @@ class TestMessageMatching:
     def forwarder_with_session(self, forwarder):
         forwarder.session = MagicMock()
         forwarder.session.closed = False  # Ensure session passes the validity check
+        # Mock prefix cache for skip_own_commands check
+        forwarder.bot._prefix_cache = MagicMock()
+        forwarder.bot._prefix_cache.get_prefixes = AsyncMock(return_value=["!"])
         return forwarder
 
     @pytest.mark.asyncio
@@ -224,7 +227,8 @@ class TestMessageMatching:
             "file_extensions": [],
             "reaction_emoji": None,
             "forwarded_messages": {},
-            "forward_bot_messages": False
+            "forward_bot_messages": False,
+            "skip_own_commands": True
         })
 
         mock_response = MagicMock()
@@ -505,3 +509,179 @@ class TestWarningEmoji:
 
         # Verify warning emoji removal was attempted
         mock_message.remove_reaction.assert_called_with("⚠️", forwarder.bot.user)
+
+
+class TestSkipOwnCommands:
+    """Test skip_own_commands functionality."""
+
+    @pytest.fixture
+    def forwarder_with_prefix_cache(self, forwarder, mock_guild):
+        """Create forwarder with mocked prefix cache."""
+        forwarder.bot._prefix_cache = MagicMock()
+        forwarder.bot._prefix_cache.get_prefixes = AsyncMock(return_value=["!", "?"])
+        return forwarder
+
+    @pytest.mark.asyncio
+    async def test_is_own_command_with_prefix(self, forwarder_with_prefix_cache, mock_message, mock_guild):
+        """Messages starting with bot prefix should be detected as commands."""
+        mock_message.content = "!forward url https://example.com"
+        mock_message.guild = mock_guild
+        result = await forwarder_with_prefix_cache._is_own_command(mock_message)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_is_own_command_with_alt_prefix(self, forwarder_with_prefix_cache, mock_message, mock_guild):
+        """Messages starting with alternative prefix should be detected."""
+        mock_message.content = "?help"
+        mock_message.guild = mock_guild
+        result = await forwarder_with_prefix_cache._is_own_command(mock_message)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_is_not_command_regular_message(self, forwarder_with_prefix_cache, mock_message, mock_guild):
+        """Regular messages should not be detected as commands."""
+        mock_message.content = "Hello everyone!"
+        mock_message.guild = mock_guild
+        result = await forwarder_with_prefix_cache._is_own_command(mock_message)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_is_not_command_empty_content(self, forwarder_with_prefix_cache, mock_message, mock_guild):
+        """Empty messages should not be detected as commands."""
+        mock_message.content = ""
+        mock_message.guild = mock_guild
+        result = await forwarder_with_prefix_cache._is_own_command(mock_message)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_is_not_command_prefix_in_middle(self, forwarder_with_prefix_cache, mock_message, mock_guild):
+        """Messages with prefix in middle should not be detected as commands."""
+        mock_message.content = "I said !help to the bot"
+        mock_message.guild = mock_guild
+        result = await forwarder_with_prefix_cache._is_own_command(mock_message)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_skips_commands_when_enabled(self, forwarder_with_prefix_cache, mock_message, mock_config):
+        """Bot commands should be skipped when skip_own_commands is enabled."""
+        mock_message.content = "!forward status"
+        mock_message.author.bot = False
+
+        # Create a mock session
+        forwarder_with_prefix_cache.session = MagicMock()
+        forwarder_with_prefix_cache.session.closed = False
+
+        mock_config.guild.return_value.all = AsyncMock(return_value={
+            "enabled": True,
+            "forward_url": "https://example.com",
+            "regex_patterns": [],
+            "forward_attachments": False,
+            "file_extensions": [],
+            "reaction_emoji": None,
+            "forwarded_messages": {},
+            "forward_bot_messages": False,
+            "skip_own_commands": True
+        })
+
+        await forwarder_with_prefix_cache.on_message(mock_message)
+        forwarder_with_prefix_cache.session.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_forwards_commands_when_disabled(self, forwarder_with_prefix_cache, mock_message, mock_config):
+        """Bot commands should be forwarded when skip_own_commands is disabled."""
+        mock_message.content = "!forward status"
+        mock_message.author.bot = False
+
+        # Create a mock session with proper async context manager
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.text = AsyncMock(return_value="OK")
+
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+        forwarder_with_prefix_cache.session = MagicMock()
+        forwarder_with_prefix_cache.session.closed = False
+        forwarder_with_prefix_cache.session.post.return_value = mock_cm
+
+        mock_config.guild.return_value.all = AsyncMock(return_value={
+            "enabled": True,
+            "forward_url": "https://example.com",
+            "regex_patterns": [],
+            "forward_attachments": False,
+            "file_extensions": [],
+            "reaction_emoji": None,
+            "forwarded_messages": {},
+            "forward_bot_messages": False,
+            "skip_own_commands": False
+        })
+
+        await forwarder_with_prefix_cache.on_message(mock_message)
+        forwarder_with_prefix_cache.session.post.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_forwards_regular_messages_with_skip_enabled(self, forwarder_with_prefix_cache, mock_message, mock_config):
+        """Regular messages should still be forwarded when skip_own_commands is enabled."""
+        mock_message.content = "Just a regular message"
+        mock_message.author.bot = False
+
+        # Create a mock session with proper async context manager
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_response.text = AsyncMock(return_value="OK")
+
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+
+        forwarder_with_prefix_cache.session = MagicMock()
+        forwarder_with_prefix_cache.session.closed = False
+        forwarder_with_prefix_cache.session.post.return_value = mock_cm
+
+        mock_config.guild.return_value.all = AsyncMock(return_value={
+            "enabled": True,
+            "forward_url": "https://example.com",
+            "regex_patterns": [],
+            "forward_attachments": False,
+            "file_extensions": [],
+            "reaction_emoji": None,
+            "forwarded_messages": {},
+            "forward_bot_messages": False,
+            "skip_own_commands": True
+        })
+
+        await forwarder_with_prefix_cache.on_message(mock_message)
+        forwarder_with_prefix_cache.session.post.assert_called_once()
+
+
+class TestSkipCommandsToggle:
+    """Test the skipcommands toggle command."""
+
+    @pytest.mark.asyncio
+    async def test_toggle_skip_commands_show_status(self, forwarder, mock_ctx, mock_config):
+        """Querying skip_own_commands status should show current state."""
+        mock_config.guild.return_value.skip_own_commands = AsyncMock(return_value=True)
+
+        await forwarder.toggle_skip_commands.callback(forwarder, mock_ctx, None)
+        mock_ctx.send.assert_called_with("Skip bot commands is currently enabled.")
+
+    @pytest.mark.asyncio
+    async def test_toggle_skip_commands_enable(self, forwarder, mock_ctx, mock_config):
+        """Enabling skip_own_commands should update config."""
+        mock_config.guild.return_value.skip_own_commands = MagicMock()
+        mock_config.guild.return_value.skip_own_commands.set = AsyncMock()
+
+        await forwarder.toggle_skip_commands.callback(forwarder, mock_ctx, True)
+        mock_config.guild.return_value.skip_own_commands.set.assert_called_with(True)
+        mock_ctx.send.assert_called_with("Skip bot commands enabled.")
+
+    @pytest.mark.asyncio
+    async def test_toggle_skip_commands_disable(self, forwarder, mock_ctx, mock_config):
+        """Disabling skip_own_commands should update config."""
+        mock_config.guild.return_value.skip_own_commands = MagicMock()
+        mock_config.guild.return_value.skip_own_commands.set = AsyncMock()
+
+        await forwarder.toggle_skip_commands.callback(forwarder, mock_ctx, False)
+        mock_config.guild.return_value.skip_own_commands.set.assert_called_with(False)
+        mock_ctx.send.assert_called_with("Skip bot commands disabled.")

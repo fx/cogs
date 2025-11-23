@@ -91,7 +91,8 @@ def mock_config():
         "enabled": False,
         "reaction_emoji": "🔁",
         "forwarded_messages": {},
-        "forward_bot_messages": False
+        "forward_bot_messages": False,
+        "skip_own_commands": True
     }
 
     guild_config = MagicMock()
