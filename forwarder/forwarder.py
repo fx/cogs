@@ -351,15 +351,16 @@ Forwarded messages tracked: {forwarded_count}"""
                     await self._add_warning_emoji(message)
             else:
                 log.debug(f"Message {message.id} from #{message.channel.name} - no forward criteria met")
-                # Track message for potential reaction-based forwarding
-                # Periodically clean up old entries to prevent unbounded growth
-                await self._cleanup_old_forwarded_messages(message.guild)
-                async with self.config.guild(message.guild).forwarded_messages() as forwarded:
-                    forwarded[str(message.id)] = {
-                        "channel_id": str(message.channel.id),
-                        "forwarded_at": datetime.now(timezone.utc).isoformat(),
-                        "forward_count": 0  # Not yet forwarded
-                    }
+                # Only track message for potential reaction-based forwarding if reaction_emoji is configured
+                if config_data.get("reaction_emoji"):
+                    # Periodically clean up old entries to prevent unbounded growth
+                    await self._cleanup_old_forwarded_messages(message.guild)
+                    async with self.config.guild(message.guild).forwarded_messages() as forwarded:
+                        forwarded[str(message.id)] = {
+                            "channel_id": str(message.channel.id),
+                            "forwarded_at": datetime.now(timezone.utc).isoformat(),
+                            "forward_count": 0  # Not yet forwarded
+                        }
 
         except Exception as e:
             log.error(f"Error processing message in guild {message.guild.id}: {e}")
